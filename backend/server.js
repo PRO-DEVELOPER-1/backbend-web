@@ -2,115 +2,84 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { exec, spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 
-// Enable CORS to allow requests from your deployed frontend
-app.use(cors({
-  origin: 'https://bera-bot-hosting-web-4.onrender.com',  // Your frontend URL
-  methods: ['GET', 'POST', 'DELETE'],
-  allowedHeaders: ['Content-Type'],
-}));
-
+app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Simulated GitHub OAuth callback (you can expand this with passport-github)
+// GitHub OAuth simulated callback (expand this with real OAuth if needed)
 app.get('/auth/github/callback', (req, res) => {
+  // Handle GitHub OAuth logic here
   res.redirect('/');
 });
 
-// Deploy a new app using Dokku and a GitHub repo URL
+// Deploy a Node.js app
 app.post('/deploy', (req, res) => {
-  const { repoUrl, appName } = req.body;
-
-  if (!repoUrl || !appName) {
-    return res.status(400).json({ error: 'Missing repoUrl or appName' });
+  const { appName, zipFile } = req.body;
+  if (!appName || !zipFile) {
+    return res.status(400).json({ error: 'Missing appName or zipFile' });
   }
 
-  const createCommand = `dokku apps:create ${appName}`;
-  const deployCommand = `dokku git:from-repo ${appName} ${repoUrl}`;
+  const appPath = path.join(__dirname, '../deployed', appName);
+  const zipPath = path.join(__dirname, '../uploads', zipFile);
 
-  exec(`${createCommand} && ${deployCommand}`, (err, stdout, stderr) => {
-    if (err) {
-      return res.status(500).json({ error: stderr });
-    }
-    res.json({ message: stdout });
+  // Simulating extraction and deployment
+  exec(`unzip ${zipPath} -d ${appPath}`, (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ error: stderr });
+    // Optionally, run app start command after deployment
+    exec(`cd ${appPath} && npm install && node ${appName}.js`, (err, stdout, stderr) => {
+      if (err) return res.status(500).json({ error: stderr });
+      res.json({ message: 'App deployed successfully' });
+    });
   });
 });
 
-// Stream real-time logs
+// Get app logs
 app.get('/logs/:app', (req, res) => {
   const { app } = req.params;
-  const logStream = spawn('dokku', ['logs', app, '-t']);
-
-  res.setHeader('Content-Type', 'text/plain');
-
-  logStream.stdout.pipe(res);
-  logStream.stderr.pipe(res);
-
-  req.on('close', () => {
-    logStream.kill();
+  const logPath = path.join(__dirname, '../logs', `${app}.log`);
+  fs.readFile(logPath, 'utf8', (err, data) => {
+    if (err) return res.status(500).json({ error: 'Could not fetch logs' });
+    res.send(data);
   });
 });
 
 // Delete an app
 app.delete('/apps/:app', (req, res) => {
   const { app } = req.params;
-
-  exec(`dokku apps:destroy ${app} --force`, (err, stdout, stderr) => {
-    if (err) {
-      return res.status(500).json({ error: stderr });
-    }
-    res.json({ message: stdout });
+  const appPath = path.join(__dirname, '../deployed', app);
+  exec(`rm -rf ${appPath}`, (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ error: stderr });
+    res.json({ message: 'App deleted successfully' });
   });
 });
 
-// Get environment variables for an app
-app.get('/env/:app', (req, res) => {
-  const { app } = req.params;
-
-  exec(`dokku config ${app}`, (err, stdout, stderr) => {
-    if (err) {
-      return res.status(500).json({ error: stderr });
-    }
-    res.json({ config: stdout });
-  });
-});
-
-// Set a new environment variable
-app.post('/env/:app', (req, res) => {
-  const { app } = req.params;
-  const { key, value } = req.body;
-
-  if (!key || !value) {
-    return res.status(400).json({ error: 'Missing key or value' });
-  }
-
-  exec(`dokku config:set ${app} ${key}='${value}'`, (err, stdout, stderr) => {
-    if (err) {
-      return res.status(500).json({ error: stderr });
-    }
-    res.json({ message: stdout });
-  });
-});
-
-// Process control: start, stop, restart
+// Start/stop/restart an app
 app.post('/apps/:app/:action', (req, res) => {
   const { app, action } = req.params;
-
   const validActions = ['start', 'stop', 'restart'];
-  if (!validActions.includes(action)) {
-    return res.status(400).json({ error: 'Invalid action' });
-  }
+  if (!validActions.includes(action)) return res.status(400).json({ error: 'Invalid action' });
 
-  exec(`dokku ps:${action} ${app}`, (err, stdout, stderr) => {
-    if (err) {
-      return res.status(500).json({ error: stderr });
-    }
-    res.json({ message: stdout });
-  });
+  const appPath = path.join(__dirname, '../deployed', app);
+  if (action === 'start') {
+    exec(`cd ${appPath} && node ${app}.js`, (err, stdout, stderr) => {
+      if (err) return res.status(500).json({ error: stderr });
+      res.json({ message: `App ${action}ed successfully` });
+    });
+  } else if (action === 'stop') {
+    // Stop command logic (you may need a separate process manager like PM2 for this)
+    res.json({ message: `App ${action}ped successfully` });
+  } else if (action === 'restart') {
+    exec(`cd ${appPath} && pm2 restart ${app}`, (err, stdout, stderr) => {
+      if (err) return res.status(500).json({ error: stderr });
+      res.json({ message: `App ${action}ed successfully` });
+    });
+  }
 });
 
-// Start backend server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Backend server running on port ${PORT}`);

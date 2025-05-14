@@ -4,12 +4,17 @@ const cors = require('cors');
 const { exec, spawn } = require('child_process');
 const app = express();
 
-app.use(cors());
+// Enable CORS to allow requests from your deployed frontend
+app.use(cors({
+  origin: 'https://bera-bot-hosting-web-4.onrender.com',  // Your frontend URL
+  methods: ['GET', 'POST', 'DELETE'],
+  allowedHeaders: ['Content-Type'],
+}));
+
 app.use(express.json());
 
 // Simulated GitHub OAuth callback (you can expand this with passport-github)
 app.get('/auth/github/callback', (req, res) => {
-  // In a real app, you'd handle OAuth logic here
   res.redirect('/');
 });
 

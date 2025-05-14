@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: bera-backend
+    env: node
+    rootDir: backend
+    buildCommand: yarn install
+    startCommand: node server.js
+    envVars:
+      - key: GITHUB_CLIENT_ID
+        value: your_client_id
+      - key: GITHUB_CLIENT_SECRET
+        value: your_client_secret
+      - key: CALLBACK_URL
+        value: https://backbend-web.onrender.com/auth/github/callback
+
+  - type: web
+    name: bera-frontend
+    env: node
+    rootDir: frontend
+    buildCommand: yarn install && yarn build
+    startCommand: yarn start
+    staticPublishPath: build

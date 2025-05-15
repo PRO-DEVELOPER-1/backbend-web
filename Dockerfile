@@ -2,17 +2,25 @@
 FROM node:18 as frontend-build
 
 WORKDIR /app
-# Copy only package.json first for better caching
+
+# First copy only package files for better caching
 COPY frontend/package.json ./frontend/
-# Install without generating lock file
-RUN cd frontend && npm install --no-package-lock && npm run build
+
+# Install frontend dependencies
+RUN cd frontend && npm install --no-package-lock
+
+# Copy ALL frontend files (including public folder)
+COPY frontend ./frontend
+
+# Build the frontend
+RUN cd frontend && npm run build
 
 # Stage 2: Backend setup
 FROM node:18
 
 WORKDIR /app
 
-# Install backend without lock file
+# Install backend dependencies
 COPY backend/package.json ./backend/
 RUN cd backend && npm install --no-package-lock
 

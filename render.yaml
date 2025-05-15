@@ -3,6 +3,8 @@ services:
     name: bera-hosting
     dockerfile: Dockerfile
     plan: free
+    region: ohio
     envVars:
       - key: NODE_ENV
         value: production
+    healthCheckPath: /

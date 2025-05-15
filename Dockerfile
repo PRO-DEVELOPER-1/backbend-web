@@ -1,30 +1,23 @@
-# Use official Node image
+# Stage 1: Build frontend
+FROM node:18 AS frontend-builder
+
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm install
+COPY frontend .
+RUN npm run build
+
+# Stage 2: Build backend
 FROM node:18
 
-# Set working directory
 WORKDIR /app
-
-# Copy package files separately to leverage Docker cache
-COPY backend/package*.json ./backend/
-COPY frontend/package*.json ./frontend/
-
-# Install backend dependencies
+COPY backend/package.json backend/package-lock.json ./backend/
 RUN cd backend && npm install
 
-# Install frontend dependencies
-RUN cd frontend && npm install
+# Copy built frontend from builder
+COPY --from=frontend-builder /app/frontend/build ./backend/public
+COPY backend ./backend
 
-# Copy all source files
-COPY . .
-
-# Build frontend
-RUN cd frontend && npm run build && \
-    mkdir -p ../backend/public && \
-    cp -r build/* ../backend/public/
-
-# Set working directory to backend
-WORKDIR /app/backend
-
-# Expose port and start server
 EXPOSE 3000
+WORKDIR /app/backend
 CMD ["node", "server.js"]

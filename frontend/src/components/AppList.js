@@ -1,19 +1,15 @@
-function AppList({ apps }) {
-  if (apps.length === 0) return null;
-
+// src/components/AppList.js
+function AppList({ apps, onViewLogs }) {
   return (
     <div className="app-list">
-      <h2>Your Deployed Apps</h2>
+      <h2>Deployed Apps</h2>
       <ul>
-        {apps.map((app, index) => (
-          <li key={index}>
-            <a 
-              href={`https://${app.name}.onrender.com`} 
-              target="_blank" 
-              rel="noopener noreferrer"
-            >
-              {app.name}.onrender.com
-            </a>
+        {apps.map((app) => (
+          <li key={app.name}>
+            <strong>{app.name}</strong> —
+            <button onClick={() => onViewLogs(app.name)} style={{ marginLeft: '1rem' }}>
+              View Logs
+            </button>
           </li>
         ))}
       </ul>

@@ -1,17 +1,8 @@
-# render.yaml
-
 services:
   - type: web
     name: bera-hosting
-    env: node
-    region: ohio  # or choose your preferred region
+    dockerfile: Dockerfile
     plan: free
-    buildCommand: |
-      cd backend && npm install
-      cd ../frontend && npm install && npm run build
-      cp -r build ../backend/public
-    startCommand: cd backend && node server.js
     envVars:
       - key: NODE_ENV
         value: production
-    healthCheckPath: /

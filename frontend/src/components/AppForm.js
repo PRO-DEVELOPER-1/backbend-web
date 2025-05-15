@@ -1,12 +1,12 @@
 import { useState } from 'react';
 
-function AppForm({ onSubmit }) {
+function AppForm({ onDeploy }) {
   const [appName, setAppName] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    onSubmit({ appName, repoUrl });
+    onDeploy({ appName, repoUrl });
     setAppName('');
     setRepoUrl('');
   };
@@ -24,7 +24,7 @@ function AppForm({ onSubmit }) {
           placeholder="my-app"
           required
         />
-        <small>This will be part of your subdomain (app-name.onrender.com)</small>
+        <small>This will be the app folder name</small>
       </div>
       <div className="form-group">
         <label htmlFor="repoUrl">GitHub Repository URL</label>

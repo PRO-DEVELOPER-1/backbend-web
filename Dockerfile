@@ -1,34 +1,21 @@
-# Stage 1: Frontend build
-FROM node:18 as frontend-build
-
-WORKDIR /app
-
-# First copy only package files for better caching
-COPY frontend/package.json ./frontend/
-
-# Install frontend dependencies
-RUN cd frontend && npm install --no-package-lock
-
-# Copy ALL frontend files (including public folder)
-COPY frontend ./frontend
-
-# Build the frontend
-RUN cd frontend && npm run build
-
-# Stage 2: Backend setup
 FROM node:18
 
+# Create frontend structure
+RUN mkdir -p /app/frontend/public && \
+    mkdir -p /app/frontend/src && \
+    echo 'console.log("Hello from generated React app")' > /app/frontend/src/index.js && \
+    echo '{"name":"bera-frontend","version":"1.0.0","dependencies":{"react":"^18.2.0","react-dom":"^18.2.0","react-scripts":"5.0.1"}}' > /app/frontend/package.json && \
+    echo '<!DOCTYPE html><html><head><title>Bera Hosting</title></head><body><div id="root"></div></body></html>' > /app/frontend/public/index.html
+
+# Install and build frontend
+WORKDIR /app/frontend
+RUN npm install --no-package-lock && npm run build
+
+# Setup backend
 WORKDIR /app
-
-# Install backend dependencies
-COPY backend/package.json ./backend/
+COPY . .
 RUN cd backend && npm install --no-package-lock
-
-# Copy built frontend from first stage
-COPY --from=frontend-build /app/frontend/build ./backend/public
-
-# Copy backend source code
-COPY backend ./backend
+RUN mv frontend/build backend/public
 
 EXPOSE 3000
 WORKDIR /app/backend

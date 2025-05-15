@@ -1,21 +1,25 @@
-# Stage 1: Build frontend
-FROM node:18 AS frontend-builder
+# Stage 1: Frontend build
+FROM node:18 as frontend-build
 
-WORKDIR /app/frontend
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm install
-COPY frontend .
-RUN npm run build
+WORKDIR /app
+# Copy only package.json first for better caching
+COPY frontend/package.json ./frontend/
+# Install without generating lock file
+RUN cd frontend && npm install --no-package-lock && npm run build
 
-# Stage 2: Build backend
+# Stage 2: Backend setup
 FROM node:18
 
 WORKDIR /app
-COPY backend/package.json backend/package-lock.json ./backend/
-RUN cd backend && npm install
 
-# Copy built frontend from builder
-COPY --from=frontend-builder /app/frontend/build ./backend/public
+# Install backend without lock file
+COPY backend/package.json ./backend/
+RUN cd backend && npm install --no-package-lock
+
+# Copy built frontend from first stage
+COPY --from=frontend-build /app/frontend/build ./backend/public
+
+# Copy backend source code
 COPY backend ./backend
 
 EXPOSE 3000

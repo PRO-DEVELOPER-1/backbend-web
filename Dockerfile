@@ -1,21 +1,51 @@
+# Stage 1: Frontend builder
+FROM node:18 as frontend-builder
+
+WORKDIR /app
+
+# First create minimal package.json if missing
+RUN mkdir -p frontend && \
+    echo '{\
+      "name": "bera-frontend",\
+      "version": "1.0.0",\
+      "scripts": {"build": "react-scripts build"},\
+      "dependencies": {\
+        "react": "^18.2.0",\
+        "react-dom": "^18.2.0",\
+        "react-scripts": "5.0.1"\
+      }\
+    }' > frontend/package.json
+
+# Copy existing files (if any) - will override generated files
+COPY frontend/package.json* ./frontend/
+
+# Install dependencies
+WORKDIR /app/frontend
+RUN npm install --no-package-lock
+
+# Copy remaining frontend files
+COPY frontend ./
+
+# Verify build script exists
+RUN npm run build --dry-run || (echo "Build script missing!" && exit 1)
+
+# Build frontend
+RUN npm run build
+
+# Stage 2: Backend
 FROM node:18
 
-# Create frontend structure
-RUN mkdir -p /app/frontend/public && \
-    mkdir -p /app/frontend/src && \
-    echo 'console.log("Hello from generated React app")' > /app/frontend/src/index.js && \
-    echo '{"name":"bera-frontend","version":"1.0.0","dependencies":{"react":"^18.2.0","react-dom":"^18.2.0","react-scripts":"5.0.1"}}' > /app/frontend/package.json && \
-    echo '<!DOCTYPE html><html><head><title>Bera Hosting</title></head><body><div id="root"></div></body></html>' > /app/frontend/public/index.html
-
-# Install and build frontend
-WORKDIR /app/frontend
-RUN npm install --no-package-lock && npm run build
-
-# Setup backend
 WORKDIR /app
-COPY . .
+
+# Install backend dependencies
+COPY backend/package.json ./backend/
 RUN cd backend && npm install --no-package-lock
-RUN mv frontend/build backend/public
+
+# Copy built frontend
+COPY --from=frontend-builder /app/frontend/build ./backend/public
+
+# Copy backend source
+COPY backend ./backend
 
 EXPOSE 3000
 WORKDIR /app/backend

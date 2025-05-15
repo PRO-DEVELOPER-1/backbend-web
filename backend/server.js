@@ -1,254 +1,132 @@
-require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const http = require('http');
+const WebSocket = require('ws');
+const { spawn } = require('child_process');
+const { PassThrough } = require('stream');
+const simpleGit = require('simple-git');
 const fs = require('fs-extra');
 const path = require('path');
-const Docker = require('dockerode');
-const simpleGit = require('simple-git');
-const axios = require('axios');
-const crypto = require('crypto');
 
 const app = express();
-const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || '/var/run/docker.sock' });
-const git = simpleGit();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+const activeLogStreams = new Map();
+const apps = new Map();
 
-// In-memory stores
-const apps = new Map(); // { appName: { containerId, port, lastAccessed, envVars } }
-const userSessions = new Map(); // { sessionId: { githubToken } }
+// WebSocket log streaming
+wss.on('connection', (ws) => {
+  ws.on('message', (message) => {
+    const { appName, type } = JSON.parse(message);
+    if (type === 'build-logs' && activeLogStreams.has(appName)) {
+      const stream = activeLogStreams.get(appName);
+      stream.on('data', (chunk) => ws.send(chunk.toString()));
+    }
+  });
+});
 
-// Helper Functions
 const detectAppType = async (appPath) => {
-  const hasPackageJson = await fs.pathExists(path.join(appPath, 'package.json'));
-  const hasRequirements = await fs.pathExists(path.join(appPath, 'requirements.txt'));
-
-  if (hasPackageJson) {
-    return {
-      type: 'node',
-      dockerfile: `FROM node:18
-WORKDIR /app
-COPY package*.json .
-RUN npm install
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]`,
-      port: 3000
-    };
-  } else if (hasRequirements) {
-    return {
-      type: 'python',
-      dockerfile: `FROM python:3.11
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-EXPOSE 5000
-CMD ["python", "app.py"]`,
-      port: 5000
-    };
+  if (await fs.pathExists(path.join(appPath, 'package.json'))) {
+    return { type: 'node', start: 'node index.js', port: 3000 };
   }
-  return {
-    type: 'static',
-    dockerfile: `FROM nginx:alpine
-COPY . /usr/share/nginx/html
-EXPOSE 80`,
-    port: 80
-  };
+  if (await fs.pathExists(path.join(appPath, 'main.py'))) {
+    return { type: 'python', start: 'python3 main.py', port: 5000 };
+  }
+  throw new Error('Unsupported app type');
 };
 
 const deployApp = async (appName, repoUrl, branch = 'main', envVars = {}) => {
   const appPath = path.join(__dirname, 'apps', appName);
-  
-  // Clean existing app directory
-  await fs.remove(appPath);
-  await fs.ensureDir(appPath);
+  const logStream = new PassThrough();
+  activeLogStreams.set(appName, logStream);
 
-  // Clone repository
-  await git.clone(repoUrl, appPath, ['-b', branch]);
+  const log = (msg) => {
+    const timestamp = new Date().toISOString();
+    const line = `[${timestamp}] ${msg}\n`;
+    logStream.write(line);
+    console.log(line.trim());
+  };
 
-  // Write .env file
-  const envContent = Object.entries(envVars).map(([k, v]) => `${k}=${v}`).join('\n');
-  await fs.writeFile(path.join(appPath, '.env'), envContent);
+  try {
+    log(`Deploying ${appName}...`);
+    await fs.remove(appPath);
+    await fs.ensureDir(appPath);
 
-  // Detect app type and generate Dockerfile
-  const { dockerfile, port, type } = await detectAppType(appPath);
-  await fs.writeFile(path.join(appPath, 'Dockerfile'), dockerfile);
+    const git = simpleGit({ baseDir: appPath });
+    await git.clone(repoUrl, '.', ['-b', branch]);
+    log('Cloned repo');
 
-  // Build Docker image
-  const stream = await docker.buildImage({
-    context: appPath,
-    src: ['Dockerfile', '.env', '.']
-  }, { t: `${appName}:latest` });
-
-  await new Promise((resolve, reject) => {
-    docker.modem.followProgress(stream, (err, output) => err ? reject(err) : resolve(output));
-  });
-
-  // Run container
-  const container = await docker.createContainer({
-    Image: `${appName}:latest`,
-    name: appName,
-    Env: Object.entries(envVars).map(([k, v]) => `${k}=${v}`),
-    HostConfig: {
-      PortBindings: { [`${port}/tcp`]: [{ HostPort: '0' }] }
+    if (Object.keys(envVars).length) {
+      await fs.writeFile(path.join(appPath, '.env'), Object.entries(envVars).map(([k, v]) => `${k}=${v}`).join('\n'));
+      log('Wrote .env');
     }
-  });
 
-  await container.start();
+    const { type, start, port } = await detectAppType(appPath);
+    log(`Detected ${type} app`);
 
-  // Store app info
-  const containerInfo = await container.inspect();
-  apps.set(appName, {
-    containerId: containerInfo.Id,
-    port,
-    type,
-    lastAccessed: Date.now(),
-    envVars
-  });
+    const [cmd, ...args] = start.split(' ');
+    const child = spawn(cmd, args, {
+      cwd: appPath,
+      env: { ...process.env, ...envVars },
+    });
 
-  // Setup auto-shutdown timer
-  const timer = setInterval(async () => {
-    const fifteenMinutes = 15 * 60 * 1000;
-    const app = apps.get(appName);
-    if (Date.now() - app.lastAccessed > fifteenMinutes) {
-      await container.stop();
-      await container.remove();
-      apps.delete(appName);
-      clearInterval(timer);
-    }
-  }, 60000);
+    child.stdout.on('data', (data) => logStream.write(data));
+    child.stderr.on('data', (data) => logStream.write(data));
+    child.on('exit', (code) => {
+      log(`App ${appName} exited with code ${code}`);
+      activeLogStreams.delete(appName);
+    });
 
-  return { containerId: containerInfo.Id, port };
+    apps.set(appName, {
+      process: child,
+      port,
+      type,
+      appPath,
+      logStream,
+    });
+
+    log(`App running on port ${port}`);
+    return { port };
+  } catch (err) {
+    log(`Error: ${err.message}`);
+    activeLogStreams.delete(appName);
+    throw err;
+  }
 };
 
-// Routes
-app.get('/health', (req, res) => {
-  docker.ping(err => {
-    res.json({
-      status: 'healthy',
-      docker: !err,
-      github: !!process.env.GITHUB_CLIENT_ID,
-      apps: apps.size
-    });
+app.use(express.json());
+
+app.post('/api/deploy', async (req, res) => {
+  const { appName, repoUrl, branch, envVars } = req.body;
+  try {
+    const result = await deployApp(appName, repoUrl, branch, envVars);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/apps/:name/logs', (req, res) => {
+  const { name } = req.params;
+  if (!activeLogStreams.has(name)) {
+    return res.status(404).json({ error: 'No active logs' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const stream = activeLogStreams.get(name);
+  stream.on('data', (chunk) => res.write(`data: ${chunk.toString().replace(/\n$/, '')}\n\n`));
+  stream.on('end', () => res.end());
+
+  req.on('close', () => {
+    stream.removeAllListeners('data');
   });
 });
 
-// GitHub OAuth
-app.get('/auth/github', (req, res) => {
-  const state = crypto.randomBytes(8).toString('hex');
-  userSessions.set(state, {});
-  res.redirect(`https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&state=${state}`);
+server.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
 });
-
-app.get('/auth/github/callback', async (req, res) => {
-  const { code, state } = req.query;
-  if (!userSessions.has(state)) return res.status(400).send('Invalid state');
-
-  try {
-    const { data } = await axios.post('https://github.com/login/oauth/access_token', {
-      client_id: process.env.GITHUB_CLIENT_ID,
-      client_secret: process.env.GITHUB_CLIENT_SECRET,
-      code
-    }, { headers: { Accept: 'application/json' } });
-
-    userSessions.get(state).githubToken = data.access_token;
-    res.redirect('/?github_connected=1');
-  } catch (err) {
-    res.status(500).send('GitHub authentication failed');
-  }
-});
-
-// GitHub Webhook
-app.post('/api/github/webhook', async (req, res) => {
-  const sig = req.headers['x-hub-signature-256'];
-  const payload = JSON.stringify(req.body);
-  
-  // Verify signature
-  const hmac = crypto.createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET);
-  const digest = `sha256=${hmac.update(payload).digest('hex')}`;
-  if (sig !== digest) return res.status(401).send('Invalid signature');
-
-  // Handle push event
-  if (req.headers['x-github-event'] === 'push') {
-    const { ref, repository } = req.body;
-    if (ref === 'refs/heads/main') {
-      const appName = repository.name;
-      if (apps.has(appName)) {
-        await deployApp(appName, repository.clone_url, 'main', apps.get(appName).envVars);
-      }
-    }
-  }
-
-  res.status(200).end();
-});
-
-// App Deployment
-app.post('/api/apps', async (req, res) => {
-  try {
-    const { appName, repoUrl, branch, envVars } = req.body;
-    
-    if (!appName || !repoUrl) {
-      return res.status(400).json({ error: 'appName and repoUrl are required' });
-    }
-    
-    if (apps.has(appName)) {
-      return res.status(400).json({ error: 'App name already exists' });
-    }
-
-    const { port } = await deployApp(appName, repoUrl, branch, envVars || {});
-    res.json({ 
-      success: true, 
-      url: `${appName}.onrender.com`,
-      port,
-      appName
-    });
-  } catch (err) {
-    console.error('Deployment error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get App Info
-app.get('/api/apps/:name', (req, res) => {
-  const app = apps.get(req.params.name);
-  if (!app) return res.status(404).json({ error: 'App not found' });
-  res.json(app);
-});
-
-// List Apps
-app.get('/api/apps', (req, res) => {
-  res.json(Array.from(apps.entries()).map(([name, details]) => ({
-    name,
-    type: details.type,
-    url: `${name}.onrender.com`,
-    createdAt: details.createdAt || new Date().toISOString()
-  })));
-});
-
-// Serve Frontend
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// Initialize
-async function startServer() {
-  try {
-    await docker.ping();
-    console.log('Connected to Docker daemon');
-    
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-      console.log(`GitHub OAuth enabled: ${!!process.env.GITHUB_CLIENT_ID}`);
-    });
-  } catch (err) {
-    console.error('Failed to connect to Docker:', err);
-    process.exit(1);
-  }
-}
-
-startServer();

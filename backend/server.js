@@ -1,86 +1,151 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { exec, spawn } = require('child_process');
-const fs = require('fs');
+const fs = require('fs-extra');
 const path = require('path');
-const app = express();
+const Docker = require('dockerode');
+const simpleGit = require('simple-git');
 
+const app = express();
+const docker = new Docker();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// GitHub OAuth simulated callback (expand this with real OAuth if needed)
-app.get('/auth/github/callback', (req, res) => {
-  // Handle GitHub OAuth logic here
-  res.redirect('/');
+// In-memory store for apps
+const apps = new Map();
+
+// Serve frontend
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Deploy a Node.js app
-app.post('/deploy', (req, res) => {
-  const { appName, zipFile } = req.body;
-  if (!appName || !zipFile) {
-    return res.status(400).json({ error: 'Missing appName or zipFile' });
+// API endpoint for creating apps
+app.post('/apps', async (req, res) => {
+  const { appName, repoUrl } = req.body;
+
+  // Validate inputs
+  if (!appName || !repoUrl) {
+    return res.status(400).json({ error: 'appName and repoUrl are required' });
   }
 
-  const appPath = path.join(__dirname, '../deployed', appName);
-  const zipPath = path.join(__dirname, '../uploads', zipFile);
+  if (apps.has(appName)) {
+    return res.status(400).json({ error: 'App name already exists' });
+  }
 
-  // Simulating extraction and deployment
-  exec(`unzip ${zipPath} -d ${appPath}`, (err, stdout, stderr) => {
-    if (err) return res.status(500).json({ error: stderr });
-    // Optionally, run app start command after deployment
-    exec(`cd ${appPath} && npm install && node ${appName}.js`, (err, stdout, stderr) => {
-      if (err) return res.status(500).json({ error: stderr });
-      res.json({ message: 'App deployed successfully' });
+  try {
+    const appPath = path.join(__dirname, 'apps', appName);
+    await fs.ensureDir(appPath);
+
+    // Clone repository
+    await simpleGit().clone(repoUrl, appPath);
+
+    // Detect app type and generate Dockerfile
+    const { dockerfile, port } = await detectAppType(appPath);
+
+    await fs.writeFile(path.join(appPath, 'Dockerfile'), dockerfile);
+
+    // Build Docker image
+    const stream = await docker.buildImage({
+      context: appPath,
+      src: ['Dockerfile', '.']
+    }, { t: appName });
+
+    await new Promise((resolve, reject) => {
+      docker.modem.followProgress(stream, (err, output) => {
+        if (err) return reject(err);
+        resolve(output);
+      });
     });
-  });
-});
 
-// Get app logs
-app.get('/logs/:app', (req, res) => {
-  const { app } = req.params;
-  const logPath = path.join(__dirname, '../logs', `${app}.log`);
-  fs.readFile(logPath, 'utf8', (err, data) => {
-    if (err) return res.status(500).json({ error: 'Could not fetch logs' });
-    res.send(data);
-  });
-});
-
-// Delete an app
-app.delete('/apps/:app', (req, res) => {
-  const { app } = req.params;
-  const appPath = path.join(__dirname, '../deployed', app);
-  exec(`rm -rf ${appPath}`, (err, stdout, stderr) => {
-    if (err) return res.status(500).json({ error: stderr });
-    res.json({ message: 'App deleted successfully' });
-  });
-});
-
-// Start/stop/restart an app
-app.post('/apps/:app/:action', (req, res) => {
-  const { app, action } = req.params;
-  const validActions = ['start', 'stop', 'restart'];
-  if (!validActions.includes(action)) return res.status(400).json({ error: 'Invalid action' });
-
-  const appPath = path.join(__dirname, '../deployed', app);
-  if (action === 'start') {
-    exec(`cd ${appPath} && node ${app}.js`, (err, stdout, stderr) => {
-      if (err) return res.status(500).json({ error: stderr });
-      res.json({ message: `App ${action}ed successfully` });
+    // Run container
+    const container = await docker.createContainer({
+      Image: appName,
+      name: appName,
+      HostConfig: {
+        PortBindings: { [`${port}/tcp`]: [{ HostPort: '0' }] }
+      }
     });
-  } else if (action === 'stop') {
-    // Stop command logic (you may need a separate process manager like PM2 for this)
-    res.json({ message: `App ${action}ped successfully` });
-  } else if (action === 'restart') {
-    exec(`cd ${appPath} && pm2 restart ${app}`, (err, stdout, stderr) => {
-      if (err) return res.status(500).json({ error: stderr });
-      res.json({ message: `App ${action}ed successfully` });
+
+    await container.start();
+
+    // Store app info
+    const containerInfo = await container.inspect();
+    apps.set(appName, {
+      containerId: containerInfo.Id,
+      port: port,
+      lastAccessed: Date.now()
     });
+
+    // Set up inactivity timer
+    const timer = setInterval(async () => {
+      const fifteenMinutes = 15 * 60 * 1000;
+      if (Date.now() - apps.get(appName).lastAccessed > fifteenMinutes) {
+        await container.stop();
+        await container.remove();
+        apps.delete(appName);
+        clearInterval(timer);
+      }
+    }, 60000); // Check every minute
+
+    res.json({ 
+      success: true, 
+      message: `App deployed successfully! Access it at ${appName}.onrender.com`,
+      appName
+    });
+
+  } catch (error) {
+    console.error('Error deploying app:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-const PORT = process.env.PORT || 5000;
+// Helper function to detect app type
+async function detectAppType(appPath) {
+  const hasPackageJson = await fs.pathExists(path.join(appPath, 'package.json'));
+  const hasRequirements = await fs.pathExists(path.join(appPath, 'requirements.txt'));
+
+  if (hasPackageJson) {
+    return {
+      dockerfile: `
+FROM node:18
+WORKDIR /app
+COPY package.json .
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]
+`,
+      port: 3000
+    };
+  } else if (hasRequirements) {
+    return {
+      dockerfile: `
+FROM python:3.11
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+EXPOSE 5000
+CMD ["python", "app.py"]
+`,
+      port: 5000
+    };
+  } else {
+    return {
+      dockerfile: `
+FROM nginx:alpine
+COPY . /usr/share/nginx/html
+EXPOSE 80
+`,
+      port: 80
+    };
+  }
+}
+
+// Start server
 app.listen(PORT, () => {
-  console.log(`Backend server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });

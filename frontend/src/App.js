@@ -1,23 +1,23 @@
+// src/App.js
 import { useState } from 'react';
 import axios from 'axios';
 import './App.css';
 import AppForm from './components/AppForm';
 import AppList from './components/AppList';
+import LogsViewer from './components/LogsViewer';
 
 function App() {
   const [apps, setApps] = useState([]);
   const [message, setMessage] = useState({ text: '', type: '' });
+  const [selectedApp, setSelectedApp] = useState(null);
 
-  const handleSubmit = async (appData) => {
+  const handleDeploy = async ({ appName, repoUrl }) => {
     try {
-      const response = await axios.post('/apps', appData);
-      setMessage({ text: response.data.message, type: 'success' });
-      setApps([...apps, { name: appData.appName, url: response.data.appName }]);
-    } catch (error) {
-      setMessage({ 
-        text: error.response?.data?.error || 'Failed to deploy app', 
-        type: 'error' 
-      });
+      const res = await axios.post('/api/deploy', { appName, repoUrl });
+      setMessage({ text: `App deployed on port ${res.data.port}`, type: 'success' });
+      setApps((prev) => [...prev, { name: appName }]);
+    } catch (err) {
+      setMessage({ text: err.response?.data?.error || 'Failed to deploy app', type: 'error' });
     }
   };
 
@@ -35,8 +35,11 @@ function App() {
       )}
 
       <main>
-        <AppForm onSubmit={handleSubmit} />
-        <AppList apps={apps} />
+        <AppForm onDeploy={handleDeploy} />
+        <AppList apps={apps} onViewLogs={setSelectedApp} />
+        {selectedApp && (
+          <LogsViewer appName={selectedApp} onClose={() => setSelectedApp(null)} />
+        )}
       </main>
 
       <footer>

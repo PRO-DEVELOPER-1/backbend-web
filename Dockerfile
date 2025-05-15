@@ -26,27 +26,8 @@ RUN npm install --no-package-lock
 # Copy remaining frontend files
 COPY frontend ./
 
-# Verify build script exists
-RUN npm run build --dry-run || (echo "Build script missing!" && exit 1)
+# Optional: Check if build script exists
+# RUN node -e "if (!require('./package.json').scripts.build) { console.error('Build script missing!'); process.exit(1); }"
 
 # Build frontend
 RUN npm run build
-
-# Stage 2: Backend
-FROM node:18
-
-WORKDIR /app
-
-# Install backend dependencies
-COPY backend/package.json ./backend/
-RUN cd backend && npm install --no-package-lock
-
-# Copy built frontend
-COPY --from=frontend-builder /app/frontend/build ./backend/public
-
-# Copy backend source
-COPY backend ./backend
-
-EXPOSE 3000
-WORKDIR /app/backend
-CMD ["node", "server.js"]

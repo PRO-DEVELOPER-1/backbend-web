@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --neon-pink: #ff00ff;
+  --neon-blue: #00ffff;
+  --neon-green: #00ff00;
+  --neon-purple: #9d00ff;
+}
+
+/* Custom Neon Effects */
+.shadow-neon {
+  box-shadow: 0 0 10px var(--neon-purple);
+}
+.border-neon {
+  border-color: var(--neon-purple);
+}
+
+/* Text Colors */
+.text-neon-pink {
+  color: var(--neon-pink);
+  text-shadow: 0 0 5px var(--neon-pink);
+}
+.text-neon-blue {
+  color: var(--neon-blue);
+}
+.text-neon-green {
+  color: var(--neon-green);
+}
+.text-neon-purple {
+  color: var(--neon-purple);
+}
+
+/* Background Colors */
+.bg-neon-pink {
+  background-color: var(--neon-pink);
+}
+.bg-neon-blue {
+  background-color: var(--neon-blue);
+}
+.bg-neon-green {
+  background-color: var(--neon-green);
+}
+.bg-neon-purple {
+  background-color: var(--neon-purple);
+}

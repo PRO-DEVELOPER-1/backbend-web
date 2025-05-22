@@ -1,49 +1,27 @@
 services:
-  # Backend Service (Node.js)
   - type: web
     name: bera-hosting-backend
     env: node
-    region: ohio
     plan: free
     buildCommand: |
       cd backend && npm install
     startCommand: |
       cd backend && node server.js
+    # Add this to disable Docker detection:
+    dockerfilePath: ""
     envVars:
-      - key: MONGO_URI
-        fromDatabase:
-          name: bera-hosting-db
-          property: connectionString
-      - key: JWT_SECRET
-        generateValue: true
-      - key: PORT
-        value: 10000
-    healthCheckPath: /api/health
+      - key: NODE_ENV
+        value: production
 
-  # Frontend Service (React)
   - type: web
     name: bera-hosting-frontend
     env: node
-    region: ohio
     plan: free
     buildCommand: |
       cd frontend && npm install
       cd frontend && npm run build
     startCommand: |
       cd frontend && npm run preview
+    dockerfilePath: ""  # Disable Docker
     staticPath:
       buildOutputDirectory: frontend/dist
-    envVars:
-      - key: VITE_API_URL
-        sync: false
-        value: /api  # Uses relative path for same-domain deployment
-
-  # MongoDB Database
-  - type: database
-    name: bera-hosting-db
-    env: mongodb
-    region: ohio
-    plan: free
-    databaseName: bera-hosting
-    ipAllowList:
-      - 0.0.0.0/0

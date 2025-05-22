@@ -7,14 +7,11 @@ export const startBot = async (botId) => {
   const bot = await Bot.findById(botId);
   if (!bot) throw new Error('Bot not found');
 
-  const logDir = path.join(process.cwd(), 'logs');
-  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
-
-  const logFile = path.join(logDir, `bot_${botId}.log`);
-  fs.writeFileSync(logFile, ''); // Clear old logs
-
   const botDir = path.join(process.cwd(), 'bots', botId);
+  const logFile = path.join(botDir, 'logs.txt');
+
   if (!fs.existsSync(botDir)) fs.mkdirSync(botDir, { recursive: true });
+  fs.writeFileSync(logFile, '');
 
   const process = spawn('node', [path.join(botDir, 'main.js')], {
     detached: true,

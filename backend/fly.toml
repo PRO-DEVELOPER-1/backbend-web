@@ -1,0 +1,12 @@
+app = "bera-backend"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  BUILDER_IMAGE = "heroku/builder:22"
+
+[mounts]
+  source = "bera_builds"
+  destination = "/tmp"

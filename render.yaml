@@ -1,14 +1,49 @@
 services:
+  # Backend Service (Node.js)
   - type: web
-    name: bera-hosting
-    dockerfile: ./backend/Dockerfile
+    name: bera-hosting-backend
+    env: node
+    region: ohio
     plan: free
+    buildCommand: |
+      cd backend && npm install
+    startCommand: |
+      cd backend && node server.js
     envVars:
-      - key: DOCKER_SOCKET
-        value: /var/run/docker.sock
-      - key: GITHUB_CLIENT_ID
-        value: your_github_client_id
-      - key: GITHUB_CLIENT_SECRET
-        value: your_github_client_secret
-      - key: GITHUB_WEBHOOK_SECRET
-        value: your_webhook_secret
+      - key: MONGO_URI
+        fromDatabase:
+          name: bera-hosting-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PORT
+        value: 10000
+    healthCheckPath: /api/health
+
+  # Frontend Service (React)
+  - type: web
+    name: bera-hosting-frontend
+    env: node
+    region: ohio
+    plan: free
+    buildCommand: |
+      cd frontend && npm install
+      cd frontend && npm run build
+    startCommand: |
+      cd frontend && npm run preview
+    staticPath:
+      buildOutputDirectory: frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+        value: /api  # Uses relative path for same-domain deployment
+
+  # MongoDB Database
+  - type: database
+    name: bera-hosting-db
+    env: mongodb
+    region: ohio
+    plan: free
+    databaseName: bera-hosting
+    ipAllowList:
+      - 0.0.0.0/0

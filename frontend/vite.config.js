@@ -1,10 +1,10 @@
 export default defineConfig({
-  base: '/', // Change to your subpath if needed
   server: {
     proxy: {
       '/api': {
-        target: process.env.VITE_API_URL,
-        changeOrigin: true
+        target: 'http://localhost:10000', // Matches backend PORT
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, '')
       }
     }
   }
